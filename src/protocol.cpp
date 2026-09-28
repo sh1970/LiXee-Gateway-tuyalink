@@ -24,6 +24,7 @@
 #include "lixee.h"        // invalidateDeviceCache()
 #include "TemplateCache.h"
 #include "actionPacer.h"   // file cadencee des actions (regles, groupes)
+#include "sonoffButton.h"  // commandes On/Off des boutons (SNZB-01P)
 extern TemplateCache templateCache;
 
 extern DeviceList devices;
@@ -1122,6 +1123,25 @@ void DecodePayload(struct ZiGateProtocol protocol, int packetSize)
         }
       }
       break;
+      /* Commande du cluster On/Off envoyee par un bouton ou une telecommande.
+       * La ZiGate decode elle-meme ces commandes et les livre ici, et NON en trame brute 0x8002 :
+       * c'est par cette trame qu'arrivent les appuis d'un SONOFF SNZB-01P.
+       * Format : <SQN u8><endpoint u8><cluster u16><mode d'adresse u8><adresse source u16>
+       *          <commande u8>, puis le LQI.
+       * Exemple : 0C 01 0006 02 063E 02 -> endpoint 1, adresse 063E, commande 02 (Toggle).
+       */
+      case 0x8095:
+      {
+        uint16_t SA = ((uint16_t)protocol.payload[5] << 8) | protocol.payload[6];
+        String inifile = GetMacAdrr(SA);
+        if (inifile != "") {
+          SetInfoLastseen(inifile, FormattedDate);
+          SetInfoStatus(inifile, String("00"));   // il vient de se manifester : joignable
+        }
+        onOffCommandActionManage(inifile, (uint8_t)protocol.payload[1],
+                                          (uint8_t)protocol.payload[7]);
+      }
+      break;
       case 0x8002:
       {
         log_d("RAW response : ");
@@ -1153,6 +1173,14 @@ void DecodePayload(struct ZiGateProtocol protocol, int packetSize)
         snprintf(tmpStatus, sizeof(tmpStatus), "%02x",protocol.payload[0]);
 
         SetInfoStatus(inifile,String(tmpStatus));
+        // Toute trame recue d'un appareil connu prouve qu'il est vivant : on date le contact ICI,
+        // pour TOUS les clusters. Sans cela, un appareil dont les donnees arrivent par 0x8002 --
+        // les rapports des clusters proprietaires, dont le FF66 du ZLinky -- gardait une date de
+        // dernier contact figee : "Dernier vu" faux dans l'IHM, et surtout ScanDevicesToRAZ()
+        // le croyait muet depuis plus d'une heure (issue #42). Chaque minute il remplissait alors
+        // le journal de debug et REMETTAIT A ZERO ses puissances, alors que ses trames arrivaient
+        // normalement. Les trames 0x8100/0x8102 (lectures et rapports standards) le faisaient deja.
+        if (inifile != "") SetInfoLastseen(inifile, FormattedDate);
 
         uint16_t clusterId = (Cluster[0] << 8) | Cluster[1];
         
@@ -1279,8 +1307,20 @@ void DecodePayload(struct ZiGateProtocol protocol, int packetSize)
             // car les données Tuya sont cluster-specific, pas des attributs ZCL
             break;  // <-- SORTIR DU CASE ICI !
         }
+        // === COMMANDE PROPRE AU CLUSTER On/Off (bouton, telecommande) ===
+        // Type de trame ZCL = 2 bits de poids faible du frame control (payload[13]) ; 01 =
+        // commande propre au cluster. Envoyee par un bouton lie a la box (bind 0x0006) :
+        // Off 0x00, On 0x01, Toggle 0x02.
+        else if (clusterId == 0x0006 && (protocol.payload[13] & 0x03) == 0x01)
+        {
+          if (inifile != "") SetInfoLastseen(inifile, FormattedDate);
+          onOffCommandActionManage(inifile, (uint8_t)protocol.payload[5], Command);
+        }
         // === TRAITEMENT ZCL STANDARD (Attribute Report) ===
-        else if ((Command == 10) || (Command == 1))
+        // Commandes globales uniquement (type de trame 00). Sans ce controle, une commande propre
+        // a un cluster de code 0x01 ou 0x0A -- typiquement On (0x01) -- etait lue comme une
+        // reponse de lecture d'attribut, avec des donnees sans rapport.
+        else if (((protocol.payload[13] & 0x03) == 0x00) && ((Command == 10) || (Command == 1)))
         {
           uint8_t Attribute[2];
           char tmp[4];

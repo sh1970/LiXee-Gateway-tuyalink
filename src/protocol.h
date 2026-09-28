@@ -24,6 +24,7 @@ String GetLastSeen(String inifile);
 String GetLQI(String inifile);
 String GetEndpoint(String inifile);
 void SetInfoStatus( String inifile, String val);
+void SetInfoLastseen( String inifile, String val);
 void SetLastSeen( String inifile, String val);
 void SetLQI( String inifile, String val);
 void SetInfoDeviceId( String inifile, String val);

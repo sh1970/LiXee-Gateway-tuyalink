@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.24
+
+### Corrections
+- **Puissance instantanée à 0 dans l'API** (`/getLinky`, `/getDevice`) et journal de debug rempli de « Pas vu depuis plus de 1 heure » (issue #42) : la date de dernier contact du ZLinky n'était pas mise à jour pour les trames reçues par la ZiGate en trame brute (clusters propriétaires, dont le FF66). La box le croyait muet depuis plus d'une heure et remettait ses puissances à zéro chaque minute, alors que ses données arrivaient normalement. La date est désormais mise à jour à chaque trame reçue, en Zigbee comme en LoRa (même défaut sur le ZLinky LoRa, dont la date restait celle de l'appairage)
+- **Pages en erreur ou blanches** (régression v2.23) : l'encodage de la page était déclaré trop loin dans l'en-tête ; le navigateur décodait mal les scripts, qui ne se chargeaient plus (`getFormattedDate` introuvable…). Même après un CTRL + F5
+- **Page Config → Règles blanche** sur une box à la mémoire chargée : la page est désormais construite en PSRAM, au lieu d'être tronquée sans aucun message
+- **Règles sur un texte** (ex. tarif en cours FF66/16 avec `!=`) : la condition était toujours vraie. Les espaces de remplissage des libellés TIC (« HC ROUGE        ») et les espaces doubles sont maintenant ignorés dans la comparaison, et un attribut déclaré texte par le template est toujours comparé comme un texte (un libellé fait uniquement de lettres A à F était pris pour un nombre hexadécimal)
+- Appareils de **device_id 0** (boutons On/Off) : leur template n'était jamais appliqué (ni affichage, ni bind, ni rapports)
+- Une commande On/Off reçue d'un bouton n'est plus interprétée à tort comme une réponse de lecture d'attribut
+
+### Nouveaux appareils / templates
+- **SONOFF SNZB-01P** (bouton) : action `single` / `double` / `long`, utilisable dans les règles et en MQTT, niveau de batterie et tension
+
+### LoRa 2.4 GHz
+- Le **rendez-vous d'appairage** passe en **SF10** (SF11 auparavant) : temps d'émission divisé par deux, donc plus de tentatives dans la fenêtre de 30 s et une confirmation plus rapide. ⚠️ Le ZLinky LoRa doit utiliser le même SF de rendez-vous pour être appairé ; un ZLinky déjà appairé n'est pas concerné
+- Nouvel outil **`recepteur/lora_rx_quality`** : firmware de test à flasher temporairement pour mesurer la qualité de réception (taux de réception, RSSI, SNR, trames perdues, bilan toutes les 30 s sur la liaison série). Écoute passive, configuration d'appairage relue sans être modifiée. La LED reste allumée tant que la réception est bonne, s'éteint après deux intervalles sans trame et clignote sur une trame en erreur CRC
+
+### Mise à jour
+- Flasher le firmware **et** mettre à jour le système de fichiers (`data/web/js/rules.js.gz`, `data/tp/0.json`, `data/web/img/icon_SNZB-01P.png`), puis redémarrer
+
 ## v2.23
 
 ### Groupes d'actions (nouvelle fonctionnalité)

@@ -626,6 +626,14 @@ const char HTTP_SHELLY_EMULE[] PROGMEM =
 
 const char HTTP_HEADER[] PROGMEM =
     "<head>"
+    // L'encodage DOIT etre declare en tete de <head>. Le navigateur ne cherche <meta charset>
+    // que dans les 1024 premiers octets du document ; au-dela il suppose windows-1252, et decode
+    // ainsi les scripts servis sans charset. functions.min.js contient des caracteres accentues,
+    // jusque dans un identifiant (powerIsTriphasé) : decode en windows-1252, il ne se
+    // chargeait plus (SyntaxError), et getFormattedDate(), getAlert()... etaient introuvables.
+    // Regression de la v2.23 : SESSION_GUARD_JS, insere avant, avait repousse la declaration
+    // a l'octet 1531.
+    "<meta charset='utf-8'>"
     "<link rel='icon' type='image/x-icon' href='web/favicon.ico'>"
     /* Le ?v= sur chaque asset statique n'est pas cosmetique.
      *
@@ -650,7 +658,6 @@ const char HTTP_HEADER[] PROGMEM =
     SESSION_GUARD_JS
     "<link href='web/css/bootstrap.min.css?v=" VERSION "' rel='stylesheet' type='text/css' />"
     "<link href='web/css/style.css?v=" VERSION "' rel='stylesheet' type='text/css' />"
-    "<meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width, initial-scale=1'>"
     "<style>"
       "body {"
@@ -667,6 +674,8 @@ const char HTTP_HEADER[] PROGMEM =
 
 const char HTTP_HEADERGRAPH[] PROGMEM =
     "<head>"
+    // Encodage en tete de <head> : voir HTTP_HEADER.
+    "<meta charset='utf-8'>"
     "<link rel='icon' type='image/x-icon' href='web/favicon.ico'>"
     // raphael est requis par justgage (jauges) ET par morris -- ne pas retirer.
     "<script type='text/javascript' src='web/js/raphael-min.js?v=" VERSION "'></script>"
@@ -687,7 +696,6 @@ const char HTTP_HEADERGRAPH[] PROGMEM =
     "<link href='web/css/bootstrap.min.css?v=" VERSION "' rel='stylesheet' type='text/css' />"
     "<link href='web/css/style.css?v=" VERSION "' rel='stylesheet' type='text/css' />"
     "<link href='web/css/energy.css?v=" VERSION "' rel='stylesheet' type='text/css' />"
-    "<meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width, initial-scale=1.0, user-scalable=yes'>"
     "</head>";
 
@@ -3116,7 +3124,10 @@ const char HTTP_CONFIG_RULES[] PROGMEM = R"rawstring(
       </div>
       <div class='card mx-auto shadow-sm' >
         <div class="card-body">
-          {{rulesList}}
+)rawstring";
+
+// Suite de la page Config -> Regles, apres la liste des regles (cf. handleConfigRules).
+const char HTTP_CONFIG_RULES_END[] PROGMEM = R"rawstring(
         </div>
       </div>
     </div>
@@ -5893,7 +5904,10 @@ float temperatureReadFixed()
 
 bool TemplateExist(int deviceId)
 {
-  if (deviceId>0)
+  // 0 est un device_id Zigbee valide : 0x0000 = On/Off Switch (boutons, ex. SONOFF SNZB-01P).
+  // Un device_id inconnu est une chaine VIDE (cf. DeviceData), pas 0 : l'exclure privait ces
+  // appareils de tout template (ni affichage, ni bind, ni configuration des rapports).
+  if (deviceId>=0)
   {
     //String path = "/tp/" + (String)deviceId + ".json";
     const char* path ="/tp/";
@@ -9997,105 +10011,123 @@ void handleConfigHTTP(AsyncWebServerRequest *request)
 void handleConfigRules(AsyncWebServerRequest *request)
 {
   if (!checkHeapForPage(request)) return;
-  String result;
-  result = F("<!DOCTYPE html><html>");
-  result += FPSTR(HTTP_HEADER);
-  result += FPSTR(HTTP_MENU);
-  result += FPSTR(HTTP_CONFIG_RULES);
-  
-  String rulesList=F("<table class='table table-striped table-hover'>");
-  rulesList+=F("<thead>");
-    rulesList+=F("<tr>");
-      rulesList+=F("<th scope='col'>Nom</th>");
-      rulesList+=F("<th scope='col' width='60px;'>Actif</th>");
-      rulesList+=F("<th scope='col' width='50px;'>Etat</th>");
-      rulesList+=F("<th scope='col' width='150px;'>Dernière Date</th>");
-      rulesList+=F("<th scope='col' width='100px;'>Actions</th>");
-    rulesList+=F("</tr>");
-  rulesList+=F("</thead>");
 
-  int exist=0;
-  String js="";
-  
+  /* Page assemblee en PSRAM (cf. PsramResponse) et non dans une String.
+   * String::concat() ignore EN SILENCE un ajout dont l'allocation echoue. Observe chez un
+   * client : le bloc HTTP_CONFIG_RULES manquait dans la page servie -- page blanche, et
+   * getFormattedDate() signale a la ligne 57 au lieu de 114 -- sans aucun message d'erreur.
+   * PsramResponse accumule dans la PSRAM (plusieurs Mo libres) et sert la page en chunked.
+   * Le HTML produit est identique a celui de l'ancienne version.
+   */
+  PsramResponse *response = new PsramResponse(32000);
+  response->print(F("<!DOCTYPE html><html>"));
+  response->print(FPSTR(HTTP_HEADER));
+  response->print(FPSTR(HTTP_MENU));
+  response->print(FPSTR(HTTP_CONFIG_RULES));
+
+  response->print(F("<table class='table table-striped table-hover'>"));
+  response->print(F("<thead>"));
+  response->print(F("<tr>"));
+  response->print(F("<th scope='col'>Nom</th>"));
+  response->print(F("<th scope='col' width='60px;'>Actif</th>"));
+  response->print(F("<th scope='col' width='50px;'>Etat</th>"));
+  response->print(F("<th scope='col' width='150px;'>Dernière Date</th>"));
+  response->print(F("<th scope='col' width='100px;'>Actions</th>"));
+  response->print(F("</tr>"));
+  response->print(F("</thead>"));
+
+  int exist = 0;
   size_t rulesCount = rulesManager.size();
-  for (size_t i = 0; i < rulesCount; i++) 
+  for (size_t i = 0; i < rulesCount; i++)
   {
     const Rule* rule = rulesManager.getRuleByIndex(i);
     if (!rule) continue;
     exist++;
-    rulesList+=F("<tr>");
-      rulesList+=F("<td scope='row'><span class='rule-name");
-      if (!rule->enabled) rulesList+=F(" text-muted");
-      rulesList+=F("'>");
-        rulesList+=rule->name.c_str();
-      rulesList+=F("</span></td>");
-      rulesList+=F("<td><div class='form-check form-switch'><input class='form-check-input' type='checkbox' onchange='toggleRule(\"");
-      rulesList+=rule->name.c_str();
-      rulesList+=F("\", this)'");
-      if (rule->enabled) rulesList+=F(" checked");
-      rulesList+=F("></div></td>");
-      rulesList+=F("<td>");
-        int status = rulesManager.getStatusRule(rule->name.c_str());
-        js += F("getRuleStatus('");
-        js +=rule->name.c_str();
-        js +=F("');");
-        rulesList+=F("<span id='status_");
-        rulesList+=rule->name.c_str();
-        rulesList+=F("'>");
-        if (status)
-        {
-          rulesList+=F("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' fill='#1bc600' class='bi bi-bookmark-check-fill' viewBox='0 0 16 16'>");
-            rulesList+=F("<path fill-rule='evenodd' d='M2 15.5V2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5m8.854-9.646a.5.5 0 0 0-.708-.708L7.5 7.793 6.354 6.646a.5.5 0 1 0-.708.708l1.5 1.5a.5.5 0 0 0 .708 0z'/>");
-          rulesList+=F("</svg>");
-        }else{
-          rulesList+=F("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' fill='#c60000' class='bi bi-bookmark-x-fill' viewBox='0 0 16 16'>");
-            rulesList+=F("<path fill-rule='evenodd' d='M2 15.5V2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5M6.854 5.146a.5.5 0 1 0-.708.708L7.293 7 6.146 8.146a.5.5 0 1 0 .708.708L8 7.707l1.146 1.147a.5.5 0 1 0 .708-.708L8.707 7l1.147-1.146a.5.5 0 0 0-.708-.708L8 6.293z'/>");
-          rulesList+=F("</svg>");
-        }
-      rulesList+=F("</span>");
-      rulesList+=F("</td>");
-      rulesList+=F("<td>");
-        rulesList+=F("<span id='dateStatus_");
-          rulesList+=rule->name.c_str();
-        rulesList+=F("'>");  
-        rulesList+=rulesManager.getLastDateRule(rule->name.c_str()).c_str();
-      rulesList+=F("</span>");
-      rulesList+=F("</td>");
-      rulesList+=F("<td>");
-        // Bouton Editer
-        rulesList+=F("<a href='/editRule?name=");
-        rulesList+=rule->name.c_str();
-        rulesList+=F("' class='btn btn-sm btn-warning me-1'>");
-          rulesList+=F("<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='currentColor' class='bi bi-pencil-square' viewBox='0 0 16 16'>");
-            rulesList+=F("<path d='M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z'/>");
-            rulesList+=F("<path fill-rule='evenodd' d='M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5z'/>");
-          rulesList+=F("</svg>");
-        rulesList+=F("</a>");
-        // Bouton Supprimer
-        rulesList+=F("<button type='button' class='btn btn-sm btn-danger' onclick='deleteRule(\"");
-        rulesList+=rule->name.c_str();
-        rulesList+=F("\")'>");
-          rulesList+=F("<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='currentColor' class='bi bi-x-square' viewBox='0 0 16 16'>");
-            rulesList+=F("<path d='M14 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zM2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2z'/>");
-            rulesList+=F("<path d='M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708'/>");
-          rulesList+=F("</svg>");
-        rulesList+=F("</button>");
-      rulesList+=F("</td>");
-    rulesList+=F("</tr>");
-  }
-  rulesList+=F("</table>");
-  result.replace("{{rulesList}}",rulesList);
+    const char* name = rule->name.c_str();
 
-  if (exist>0)
+    response->print(F("<tr>"));
+    response->print(F("<td scope='row'><span class='rule-name"));
+    if (!rule->enabled) response->print(F(" text-muted"));
+    response->print(F("'>"));
+    response->print(name);
+    response->print(F("</span></td>"));
+    response->print(F("<td><div class='form-check form-switch'><input class='form-check-input' type='checkbox' onchange='toggleRule(\""));
+    response->print(name);
+    response->print(F("\", this)'"));
+    if (rule->enabled) response->print(F(" checked"));
+    response->print(F("></div></td>"));
+
+    response->print(F("<td>"));
+    int status = rulesManager.getStatusRule(name);
+    response->print(F("<span id='status_"));
+    response->print(name);
+    response->print(F("'>"));
+    if (status)
+    {
+      response->print(F("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' fill='#1bc600' class='bi bi-bookmark-check-fill' viewBox='0 0 16 16'>"));
+      response->print(F("<path fill-rule='evenodd' d='M2 15.5V2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5m8.854-9.646a.5.5 0 0 0-.708-.708L7.5 7.793 6.354 6.646a.5.5 0 1 0-.708.708l1.5 1.5a.5.5 0 0 0 .708 0z'/>"));
+      response->print(F("</svg>"));
+    }else{
+      response->print(F("<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' fill='#c60000' class='bi bi-bookmark-x-fill' viewBox='0 0 16 16'>"));
+      response->print(F("<path fill-rule='evenodd' d='M2 15.5V2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.74.439L8 13.069l-5.26 2.87A.5.5 0 0 1 2 15.5M6.854 5.146a.5.5 0 1 0-.708.708L7.293 7 6.146 8.146a.5.5 0 1 0 .708.708L8 7.707l1.146 1.147a.5.5 0 1 0 .708-.708L8.707 7l1.147-1.146a.5.5 0 0 0-.708-.708L8 6.293z'/>"));
+      response->print(F("</svg>"));
+    }
+    response->print(F("</span>"));
+    response->print(F("</td>"));
+
+    response->print(F("<td>"));
+    response->print(F("<span id='dateStatus_"));
+    response->print(name);
+    response->print(F("'>"));
+    response->print(rulesManager.getLastDateRule(name));
+    response->print(F("</span>"));
+    response->print(F("</td>"));
+
+    response->print(F("<td>"));
+    // Bouton Editer
+    response->print(F("<a href='/editRule?name="));
+    response->print(name);
+    response->print(F("' class='btn btn-sm btn-warning me-1'>"));
+    response->print(F("<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='currentColor' class='bi bi-pencil-square' viewBox='0 0 16 16'>"));
+    response->print(F("<path d='M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z'/>"));
+    response->print(F("<path fill-rule='evenodd' d='M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5z'/>"));
+    response->print(F("</svg>"));
+    response->print(F("</a>"));
+    // Bouton Supprimer
+    response->print(F("<button type='button' class='btn btn-sm btn-danger' onclick='deleteRule(\""));
+    response->print(name);
+    response->print(F("\")'>"));
+    response->print(F("<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='currentColor' class='bi bi-x-square' viewBox='0 0 16 16'>"));
+    response->print(F("<path d='M14 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zM2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2z'/>"));
+    response->print(F("<path d='M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708'/>"));
+    response->print(F("</svg>"));
+    response->print(F("</button>"));
+    response->print(F("</td>"));
+    response->print(F("</tr>"));
+  }
+  response->print(F("</table>"));
+  response->print(FPSTR(HTTP_CONFIG_RULES_END));
+
+  if (exist > 0)
   {
-    result +="<script>"+js+"</script>";
+    response->print(F("<script>"));
+    for (size_t i = 0; i < rulesCount; i++)
+    {
+      const Rule* rule = rulesManager.getRuleByIndex(i);
+      if (!rule) continue;
+      response->print(F("getRuleStatus('"));
+      response->print(rule->name.c_str());
+      response->print(F("');"));
+    }
+    response->print(F("</script>"));
   }else{
-    result += F("<div align='center' style='height:100px;font-size:28px;font-weight:bold;'>Pas de règles</div> <br>");
+    response->print(F("<div align='center' style='height:100px;font-size:28px;font-weight:bold;'>Pas de règles</div> <br>"));
   }
-  result += footer();
-  result += F("</html>");
+  response->print(footer());
+  response->print(F("</html>"));
 
-  request->send(200, "text/html", result);
+  response->send(request, "text/html");
+  delete response;
 }
 
 void handleEditRule(AsyncWebServerRequest *request)

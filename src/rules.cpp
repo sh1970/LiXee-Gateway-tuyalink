@@ -413,6 +413,27 @@ double RulesManager::parseNumber(const String& str, bool isFromZigbee) const {
 // ÉVALUATION DES CONDITIONS
 // ============================================================================
 
+// Forme canonique d'une valeur texte pour les comparaisons == / != : espaces de debut et de fin
+// retires, suites d'espaces reduites a un seul. Les libelles TIC sont completes par des espaces
+// (LTARF fait 16 caracteres, ex. "HC ROUGE        ") et un espace double saisi ou recu faisait
+// echouer l'egalite : la condition "!=" etait alors TOUJOURS vraie, quelle que soit la chaine
+// saisie. La casse est ignoree par equalsIgnoreCase().
+static String normalizeText(const String& in) {
+    String out;
+    out.reserve(in.length());
+    bool pendingSpace = false;
+    for (size_t i = 0; i < in.length(); i++) {
+        char ch = in.charAt(i);
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+            pendingSpace = out.length() > 0;   // pas d'espace en tete
+            continue;
+        }
+        if (pendingSpace) { out += ' '; pendingSpace = false; }
+        out += ch;
+    }
+    return out;                                 // pas d'espace en fin
+}
+
 bool RulesManager::evaluateCondition(const Condition& cond) const {
     String type = String(cond.type.c_str());
 
@@ -511,23 +532,27 @@ bool RulesManager::evaluateCondition(const Condition& cond) const {
         }
     }
 
-    bool currentIsNumber = isNumeric(curStr);
-    bool condIsNumber = isNumeric(condValueStr);
+    // Un attribut que le template declare "string" est TOUJOURS compare en texte : isNumeric()
+    // accepte les chiffres hexadecimaux et prendrait pour un nombre un libelle ne contenant que
+    // des lettres A-F.
+    bool declaredText = false;
+    if (strcmp(cond.type.c_str(), "device") == 0) {
+        DeviceData* device = findDeviceByIEEE(cond.IEEE.c_str());
+        if (device) declaredText = device->GetAttributeType(cond.cluster, cond.attribute) == "string";
+    }
+    bool currentIsNumber = !declaredText && isNumeric(curStr);
+    bool condIsNumber = !declaredText && isNumeric(condValueStr);
 
     if (cond.op == "==") {
         if (!currentIsNumber || !condIsNumber) {
-            String curTrimmed = curStr; String condTrimmed = condValueStr;
-            curTrimmed.trim(); condTrimmed.trim();
-            return curTrimmed.equalsIgnoreCase(condTrimmed);
+            return normalizeText(curStr).equalsIgnoreCase(normalizeText(condValueStr));
         }
         return parseNumber(curStr, true) * coefficient == parseNumber(condValueStr, false);
     }
 
     if (cond.op == "!=") {
         if (!currentIsNumber || !condIsNumber) {
-            String curTrimmed = curStr; String condTrimmed = condValueStr;
-            curTrimmed.trim(); condTrimmed.trim();
-            return !curTrimmed.equalsIgnoreCase(condTrimmed);
+            return !normalizeText(curStr).equalsIgnoreCase(normalizeText(condValueStr));
         }
         return parseNumber(curStr, true) * coefficient != parseNumber(condValueStr, false);
     }

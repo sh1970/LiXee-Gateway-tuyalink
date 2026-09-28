@@ -1,0 +1,61 @@
+{
+  "SNZB-01P": [
+    {
+      "status": [
+        {
+          "name": "Action",
+          "cluster": "0006",
+          "attribut": 0,
+          "mqtt_icon": "gesture-tap-button",
+          "visible": 1
+        },
+        {
+          "name": "Batterie",
+          "cluster": "0001",
+          "attribut": 33,
+          "type": "numeric",
+          "coefficient": 0.5,
+          "unit": "%",
+          "mqtt_device_class": "battery",
+          "mqtt_state_class": "measurement",
+          "mqtt_icon": "battery",
+          "visible": 1,
+          "jauge": "battery",
+          "min": 0,
+          "max": 100
+        },
+        {
+          "name": "Tension",
+          "cluster": "0001",
+          "attribut": 32,
+          "type": "numeric",
+          "coefficient": 0.1,
+          "unit": "V",
+          "mqtt_device_class": "voltage",
+          "mqtt_state_class": "measurement",
+          "visible": 1
+        }
+      ],
+      "bind": "6;1",
+      "report": [
+        {
+          "cluster": "0001",
+          "attribut": 33,
+          "type": 32,
+          "min": 3600,
+          "max": 7200,
+          "change": 2
+        },
+        {
+          "cluster": "0001",
+          "attribut": 32,
+          "type": 32,
+          "min": 3600,
+          "max": 7200,
+          "change": 1
+        }
+      ],
+      "action": []
+    }
+  ]
+}

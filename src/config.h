@@ -9,7 +9,7 @@
 #include <ArduinoJson.h>
 #include <malloc.h>
 
-#define VERSION "v2.23"
+#define VERSION "v2.24"
 
 // hardware config64
 #define RESET_ZIGATE 40//4

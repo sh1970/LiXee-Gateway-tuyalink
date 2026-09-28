@@ -4,6 +4,7 @@
 #include "device.h"
 #include "rules.h"        // extern DeviceList devices
 #include "zigbee.h"
+#include "protocol.h"     // SetInfoLastseen() : date de dernier contact, comme cote Zigbee
 #include "lixee.h"        // invalidateDeviceCache() : le cache findDevice doit suivre les ajouts
 #include "SPIFFS_ini.h"
 #include "aes128.h"
@@ -58,7 +59,12 @@ static const float CH_FREQ[8] = {2410.0, 2420.0, 2430.0, 2440.0, 2450.0, 2460.0,
 #define SZ_PAIR_RESPONSE 21   // §4.2 : +1 octet op_SF en [20] (etait 20 avant SF a l'appairage)
 #define SZ_PAIR_CONFIRM  15
 #define SZ_ESSENTIAL     17
-#define LORA_PAIR_SF     11   // rendez-vous d'appairage : canal 3 + SF11 fixes (§4)
+// Rendez-vous d'appairage : canal 3 + SF fixes (§4), quelle que soit la config operationnelle.
+// SF10 plutot que SF11 : le temps d'emission est divise par deux, donc la fenetre de 30 s laisse
+// passer deux fois plus de tentatives et le PAIR_CONFIRM revient plus vite. On perd ~2,5 dB de
+// budget de liaison, sans consequence pour un appairage qui se fait a portee de main.
+// ATTENTION : l'emetteur doit utiliser le MEME SF pour le rendez-vous, sinon il n'est pas entendu.
+#define LORA_PAIR_SF     10
 
 // Type par défaut si l'émetteur ne l'annonce pas (PAIR_REQUEST historique de 11 octets) :
 // c'était forcément un ZLinky. device_id nomme le template data/tp/81.json, model en est la clé.
@@ -843,7 +849,7 @@ static void loraStartPairingNow() {
   awaitingConfirm    = false;
   pinMode(LED_PIN, OUTPUT);           // deja fait au boot, mais on ne depend pas de l'ordre d'init
   ledLastToggle = 0; ledState = false;   // demarre le clignotement des le prochain loop
-  // Rendez-vous d'appairage FIXE : canal 3 + SF11 (§4), quelle que soit la config operationnelle.
+  // Rendez-vous d'appairage FIXE : canal 3 + SF10 (§4), quelle que soit la config operationnelle.
   // C'est ce qui permet a un ZLinky tournant sur un autre canal/SF de revenir se faire entendre.
   setChannel(LORA_PAIR_CHANNEL);
   setSF(LORA_PAIR_SF);
@@ -1043,6 +1049,11 @@ static void handleData(uint8_t *buf, int len, float rssi, float snr) {
     }
 
     String inifile = macToHex(e.mac) + ".json";
+    // Trame valide : on date le contact, comme le fait le Zigbee a la reception. Sans cela la
+    // date restait celle de l'appairage ("Last seen" fige dans l'IHM), et ScanDevicesToRAZ()
+    // croyait l'appareil muet depuis plus d'une heure : journal de debug rempli chaque minute
+    // et puissances remises a zero (issue #42).
+    SetInfoLastseen(inifile, FormattedDate);
     int dataLen = len - MIC_SIZE;
     if ((buf[0] & 0x0F) == T_ESSENTIAL) mapEssential(inifile, buf, dataLen, e);
     else                                mapExtended(inifile, buf, dataLen, e);
@@ -1187,14 +1198,14 @@ void loraReceiverLoop() {
   if (loraPairingMode) pairingLedTick(); else if (ledState) pairingLedOff();
 
   // Fin de la fenêtre d'appairage -> retour à l'écoute des données sur la config operationnelle
-  // (le rendez-vous forcait canal 3 + SF11, il faut restaurer canal/SF op).
+  // (le rendez-vous forcait canal 3 + SF10, il faut restaurer canal/SF op).
   if (loraPairingMode && (millis() - loraPairingStartMs > LORA_PAIR_WINDOW_MS)) {
     loraPairingMode = false; awaitingConfirm = false;
     pairingLedOff();
     setChannel(g_opChannel); setSF(g_sf); radio.startReceive();
     LLOG("[LoRa] fenetre d'appairage fermee\r\n");
   }
-  // Pas de CONFIRM : on retourne écouter les PAIR_REQUEST sur le rendez-vous (canal 3, SF11).
+  // Pas de CONFIRM : on retourne écouter les PAIR_REQUEST sur le rendez-vous (canal 3, SF10).
   if (awaitingConfirm && millis() > confirmDeadline) {
     awaitingConfirm = false;
     LLOG("[LoRa] pas de PAIR_CONFIRM recu (timeout)\r\n");
