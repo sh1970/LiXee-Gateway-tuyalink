@@ -30,3 +30,6 @@
 *.exe
 *.out
 *.app
+
+# PlatformIO : build et bibliotheques telechargees, regeneres a chaque compilation
+.pio/
